@@ -1,10 +1,10 @@
-from .trainer import Trainer
-from .utils import init_logging, set_seed
+from trainer import Trainer
+from utils import init_logging, set_seed
 from loguru import logger
 
 def main():
     # 初始化配置和日志
-    from .config import Config
+    from config import Config
     init_logging()
     set_seed(42)
     

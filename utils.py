@@ -15,7 +15,7 @@ def set_seed(seed):
 
 def init_logging():
     """初始化日志系统"""
-    from .config import Config
+    from config import Config
     logger.add(f"{Config.LOG_DIR}/system.log", rotation="100 MB", level="INFO")
     logger.info("日志系统初始化完成")
 

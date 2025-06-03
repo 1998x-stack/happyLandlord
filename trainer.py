@@ -2,11 +2,12 @@ import torch
 import numpy as np
 from collections import defaultdict
 from loguru import logger
-from torch.utils.tensorboard import SummaryWriter
-from .environment import LandlordEnv2v2
-from .agent import DQNAgent
-from .memory import TeamMemory
-from .config import Config
+# from torch.utils.tensorboard import SummaryWriter
+from tensorboardX import SummaryWriter
+from environment import LandlordEnv2v2
+from agent import DQNAgent
+from memory import TeamMemory
+from config import Config
 
 class Trainer:
     def __init__(self, device="cuda" if torch.cuda.is_available() else "cpu"):
@@ -53,15 +54,31 @@ class Trainer:
             current_player = self.env.current_player
             epsilon = self.get_epsilon()
             
-            # 简化合法动作生成 (实际应实现完整动作空间)
-            legal_actions = list(range(600))
+            # 获取当前状态的合法动作
+            legal_actions = self.env.get_legal_actions()
+            if not legal_actions:
+                logger.warning(f"玩家 {current_player} 没有合法动作，强制PASS")
+                legal_actions = [0]  # 0 表示PASS
             
             # 智能体选择动作
             action = self.agents[current_player].select_action(
                 state, legal_actions, epsilon=epsilon)
             
-            # 执行动作
-            next_state, reward, done, info = self.env.step(action)
+            # 记录调试信息
+            logger.debug(f"Player {current_player} selecting action {action} from {len(legal_actions)} legal actions")
+            try:
+                # 执行动作
+                next_state, reward, done, info = self.env.step(action)
+            except ValueError as e:
+                # 捕获非法动作异常
+                logger.error(f"非法动作错误: {str(e)}")
+                logger.error(f"当前玩家: {current_player}, 手牌数量: {len(self.env.hands[current_player])}")
+                logger.error(f"上家玩家: {self.env.last_move_player}, 上家出牌: {self.env.last_move}")
+                logger.error(f"选择的动作: {action}, 合法动作列表: {legal_actions}")
+                logger.error("强制执行PASS动作")
+                next_state, reward, done, info = self.env.step(0)  # 强制PASS
+                reward = -1.0  # 给予更大的负奖励以惩罚非法动作
+        
             self.step_count += 1
             
             # 记录经验
@@ -78,7 +95,8 @@ class Trainer:
                 "action": action,
                 "reward": reward,
                 "epsilon": epsilon,
-                "step": self.step_count
+                "step": self.step_count,
+                "legal_actions_count": len(legal_actions)
             })
             
             # 更新状态
@@ -94,6 +112,7 @@ class Trainer:
             if len(self.memory.buffer) > self.config.BATCH_SIZE:
                 loss = self.train_step()
                 self.writer.add_scalar('loss', loss, self.step_count)
+                self.writer.add_scalar('legal_actions_count', len(legal_actions), self.step_count)
         
         # 记录团队奖励
         team_rewards = {
