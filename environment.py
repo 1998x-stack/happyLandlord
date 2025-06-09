@@ -13,7 +13,7 @@ import numpy as np
 import random
 from collections import deque
 from enum import Enum
-from typing import List, Tuple, Dict, Optional, Any
+from typing import List, Tuple
 
 class CardType(Enum):
     """卡牌类型枚举"""
@@ -162,8 +162,13 @@ class Config:
         self.NUM_PLAYERS = 4  # 玩家数量
         self.TEAM_A = [0, 2]  # A队玩家ID
         self.TEAM_B = [1, 3]  # B队玩家ID
-        self.STATE_SHAPE = (6, 16)  # 状态张量形状
-
+        # 通道0: 当前玩家手牌
+        # 通道1: 队友手牌
+        # 通道2: 对手1已出牌
+        # 通道3: 对手2已出牌
+        # 通道4: 历史记录（最近5步）
+        # 通道5: 游戏状态（当前玩家、倍数、炸弹使用等）
+        self.STATE_SHAPE = (6, 5, 15)  # 状态张量形状
 class LandlordEnv2v2:
     """腾讯欢乐斗地主2V2环境实现"""
     def __init__(self, seed: int = None):
@@ -365,27 +370,206 @@ class LandlordEnv2v2:
     
     def _action_to_card_group(self, action: int) -> CardGroup:
         """
-        将动作编号转换为卡牌组合
+        重新设计的智能出牌策略
         
-        Args:
-            action: 动作编号
-            
-        Returns:
-            CardGroup: 对应的卡牌组合
+        动作编号定义：
+        0: 不出
+        1-10: 根据当前局面智能选择最佳牌型
+        11-20: 特定牌型策略（如炸弹、连牌等）
         """
         hand = self.hands[self.current_player]
+        hand_values = [card.value for card in hand]
+        hand_values.sort()
         
-        # 不出
+        # 0: 不出
         if action == 0:
             return CardGroup(CardType.PASS, -1)
         
-        # 策略1：优先尝试出最小单牌
-        if len(hand) >= 1:
+        # 1: 最小单牌（基础策略）
+        if action == 1:
             min_card = min(hand, key=lambda c: c.value)
             return CardGroup(CardType.SINGLE, min_card.value, [min_card])
         
-        # 如果没有任何牌可出（理论上不可能）
-        return CardGroup(CardType.PASS, -1)
+        # 2: 最小对子
+        if action == 2:
+            for value in set(hand_values):
+                if hand_values.count(value) >= 2:
+                    pair_cards = [card for card in hand if card.value == value][:2]
+                    return CardGroup(CardType.PAIR, value, pair_cards)
+        
+        # 3: 最小三张
+        if action == 3:
+            for value in set(hand_values):
+                if hand_values.count(value) >= 3:
+                    triple_cards = [card for card in hand if card.value == value][:3]
+                    return CardGroup(CardType.TRIPLE, value, triple_cards)
+        
+        # 4: 三带一
+        if action == 4:
+            # 先找三张
+            triple_value = None
+            for value in set(hand_values):
+                if hand_values.count(value) >= 3:
+                    triple_value = value
+                    break
+            
+            if triple_value:
+                # 再找最小单牌（非三张牌的点数）
+                single_value = min([v for v in set(hand_values) if v != triple_value])
+                triple_cards = [card for card in hand if card.value == triple_value][:3]
+                single_card = [card for card in hand if card.value == single_value][0]
+                return CardGroup(CardType.TRIPLE_WITH_SINGLE, triple_value, triple_cards + [single_card])
+        
+        # 5: 三带对
+        if action == 5:
+            # 先找三张
+            triple_value = None
+            for value in set(hand_values):
+                if hand_values.count(value) >= 3:
+                    triple_value = value
+                    break
+            
+            if triple_value:
+                # 再找最小对子（非三张牌的点数）
+                for value in set(hand_values):
+                    if value != triple_value and hand_values.count(value) >= 2:
+                        triple_cards = [card for card in hand if card.value == triple_value][:3]
+                        pair_cards = [card for card in hand if card.value == value][:2]
+                        return CardGroup(CardType.TRIPLE_WITH_PAIR, triple_value, triple_cards + pair_cards)
+        
+        # 6: 最小顺子（5张）
+        if action == 6:
+            # 寻找连续5张牌
+            for start in range(len(hand_values) - 4):
+                if hand_values[start+4] - hand_values[start] == 4:
+                    # 确认连续
+                    if all(hand_values[start+i] + 1 == hand_values[start+i+1] 
+                        for i in range(4)):
+                        # 取出这5张牌
+                        straight_cards = []
+                        for value in range(hand_values[start], hand_values[start]+5):
+                            # 取最小花色的牌
+                            cards_of_value = [c for c in hand if c.value == value]
+                            cards_of_value.sort(key=lambda c: c.suit)
+                            straight_cards.append(cards_of_value[0])
+                        return CardGroup(CardType.STRAIGHT, hand_values[start], straight_cards)
+        
+        # 7: 最小连对（3连对）
+        if action == 7:
+            # 获取所有对子点数
+            pair_values = [v for v in set(hand_values) if hand_values.count(v) >= 2]
+            pair_values.sort()
+            
+            # 寻找连续3个对子
+            for i in range(len(pair_values) - 2):
+                if pair_values[i] + 2 == pair_values[i+2]:
+                    # 取出这些对子
+                    consecutive_pairs = []
+                    for value in pair_values[i:i+3]:
+                        cards_of_value = [c for c in hand if c.value == value][:2]
+                        consecutive_pairs.extend(cards_of_value)
+                    return CardGroup(CardType.CONSECUTIVE_PAIRS, pair_values[i], consecutive_pairs)
+        
+        # 8: 最小飞机（2个连续三张）
+        if action == 8:
+            # 获取所有三张点数
+            triple_values = [v for v in set(hand_values) if hand_values.count(v) >= 3]
+            triple_values.sort()
+            
+            # 寻找连续2个三张
+            for i in range(len(triple_values) - 1):
+                if triple_values[i] + 1 == triple_values[i+1]:
+                    # 取出这些三张
+                    airplane_cards = []
+                    for value in triple_values[i:i+2]:
+                        cards_of_value = [c for c in hand if c.value == value][:3]
+                        airplane_cards.extend(cards_of_value)
+                    return CardGroup(CardType.AIRPLANE, triple_values[i], airplane_cards)
+        
+        # 9: 炸弹（最小四张炸）
+        if action == 9:
+            for value in set(hand_values):
+                if hand_values.count(value) >= 4:
+                    bomb_cards = [card for card in hand if card.value == value][:4]
+                    return CardGroup(CardType.BOMB, value, bomb_cards)
+        
+        # 10: 王炸（如果有）
+        if action == 10:
+            jokers = [card for card in hand if card.is_joker]
+            if len(jokers) >= 2:
+                return CardGroup(CardType.KING_BOMB, 11, jokers[:2])
+        
+        # 11: 顶牌策略（出比对手大的最小牌）
+        if action == 11 and self.last_move:
+            # 获取对手牌型
+            opp_type = self.last_move.card_type
+            opp_strength = self.last_move.strength
+            
+            # 寻找比对手大的最小牌
+            for card in sorted(hand, key=lambda c: c.value):
+                # 单牌比较
+                if opp_type == CardType.SINGLE and card.value > opp_strength:
+                    return CardGroup(CardType.SINGLE, card.value, [card])
+                
+                # 对子比较
+                if opp_type == CardType.PAIR:
+                    # 找同点数的对子
+                    same_value_cards = [c for c in hand if c.value == card.value]
+                    if len(same_value_cards) >= 2 and card.value > opp_strength:
+                        return CardGroup(CardType.PAIR, card.value, same_value_cards[:2])
+        
+        # 12: 拆牌策略（拆大牌管小牌）
+        if action == 12 and self.last_move:
+            # 当无法直接压制时，考虑拆大牌
+            if self.last_move.card_type == CardType.SINGLE:
+                # 找最小的大于对手牌的单牌
+                for card in sorted(hand, key=lambda c: c.value):
+                    if card.value > self.last_move.main_rank:
+                        return CardGroup(CardType.SINGLE, card.value, [card])
+            
+            # 拆对子压制单牌
+            if self.last_move.card_type == CardType.SINGLE:
+                # 寻找比对手牌大的最小对子
+                for value in set(hand_values):
+                    if value > self.last_move.main_rank and hand_values.count(value) >= 2:
+                        pair_cards = [card for card in hand if card.value == value][:2]
+                        # 拆出一张单牌
+                        return CardGroup(CardType.SINGLE, value, [pair_cards[0]])
+        
+        # 13: 过牌策略（队友出牌后选择过牌）
+        if action == 13 and self.last_move_player == self._get_teammate(self.current_player):
+            return CardGroup(CardType.PASS, -1)
+        
+        # 14: 压牌策略（对手出牌后尽量压制）
+        if action == 14 and self.last_move and self.last_move_player != self._get_teammate(self.current_player):
+            # 尝试用同类型牌压制
+            if self.last_move.card_type != CardType.PASS:
+                # 寻找同类型但更大的牌
+                for value in set(hand_values):
+                    if value > self.last_move.main_rank:
+                        # 单牌
+                        if self.last_move.card_type == CardType.SINGLE:
+                            same_value_cards = [c for c in hand if c.value == value]
+                            if same_value_cards:
+                                return CardGroup(CardType.SINGLE, value, [same_value_cards[0]])
+                        
+                        # 对子
+                        if self.last_move.card_type == CardType.PAIR:
+                            same_value_cards = [c for c in hand if c.value == value]
+                            if len(same_value_cards) >= 2:
+                                return CardGroup(CardType.PAIR, value, same_value_cards[:2])
+        
+        # 15: 保存实力策略（保留大牌和炸弹）
+        if action == 15:
+            # 找最小牌出，避免出大牌
+            min_value = min(hand_values)
+            min_cards = [card for card in hand if card.value == min_value]
+            return CardGroup(CardType.SINGLE, min_value, [min_cards[0]])
+        
+        # 默认策略：出最小单牌
+        min_card = min(hand, key=lambda c: c.value)
+        return CardGroup(CardType.SINGLE, min_card.value, [min_card])
+
     
     def _get_state(self) -> np.ndarray:
         """
