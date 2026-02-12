@@ -679,7 +679,109 @@ class LandlordEnv2v2:
                 elif card.value == 9:  # 2
                     penalty += 0.05
         return penalty
-    
+     
+    def get_legal_actions(self) -> List[int]:
+        """
+        获取当前状态下合法的动作列表
+        
+        Returns:
+            List[int]: 合法动作ID列表
+        """
+        legal_actions = [0]  # 0 表示PASS总是合法
+       
+        # 检查各种可能的出牌动作
+        hand = self.hands[self.current_player]
+        hand_values = [card.value for card in hand]
+        hand_values.sort()
+        
+        # 1-20: 检查各种牌型是否可能
+        # 检查是否有足够的牌出单张
+        if len(hand) > 0:
+            legal_actions.append(1)  # 最小单牌
+        
+        # 检查是否有对子
+        for value in set(hand_values):
+            if hand_values.count(value) >= 2:
+                legal_actions.append(2)  # 最小对子
+                break
+        
+        # 检查是否有三张
+        for value in set(hand_values):
+            if hand_values.count(value) >= 3:
+                legal_actions.append(3)  # 最小三张
+                break
+        
+        # 检查是否有三带一
+        triple_value = None
+        for value in set(hand_values):
+            if hand_values.count(value) >= 3:
+                triple_value = value
+                break
+        
+        if triple_value:
+            for value in set(hand_values):
+                if value != triple_value:
+                    legal_actions.append(4)  # 三带一
+                    break
+        
+        # 检查是否有三带对
+        if triple_value:
+            for value in set(hand_values):
+                if value != triple_value and hand_values.count(value) >= 2:
+                    legal_actions.append(5)  # 三带对
+                    break
+        
+        # 检查是否有顺子（至少5张连续）
+        if len(set(hand_values)) >= 5:
+            for start in range(len(set(hand_values)) - 4):
+                sorted_values = sorted(set(hand_values))
+                if start + 4 < len(sorted_values):
+                    if all(sorted_values[start+i] + 1 == sorted_values[start+i+1] 
+                          for i in range(4)):
+                        legal_actions.append(6)  # 顺子
+                        break
+        
+        # 检查是否有连对
+        pair_values = [v for v in set(hand_values) if hand_values.count(v) >= 2]
+        if len(set(pair_values)) >= 3:
+            pair_values.sort()
+            for i in range(len(pair_values) - 2):
+                if pair_values[i] + 2 == pair_values[i+2]:
+                    legal_actions.append(7)  # 连对
+                    break
+        
+        # 检查是否有飞机
+        triple_values = [v for v in set(hand_values) if hand_values.count(v) >= 3]
+        if len(set(triple_values)) >= 2:
+            triple_values.sort()
+            for i in range(len(triple_values) - 1):
+                if triple_values[i] + 1 == triple_values[i+1]:
+                    legal_actions.append(8)  # 飞机
+                    break
+        
+        # 检查是否有炸弹
+        for value in set(hand_values):
+            if hand_values.count(value) >= 4:
+                legal_actions.append(9)  # 炸弹
+                break
+        
+        # 检查是否有王炸
+        jokers = [card for card in hand if card.is_joker]
+        if len(jokers) >= 2:
+            legal_actions.append(10)  # 王炸
+        
+        # 其他策略性动作（11-20）基于当前局面
+        if self.last_move:
+            legal_actions.append(11)  # 顶牌策略
+            legal_actions.append(14)  # 压牌策略
+        
+        # 添加其他策略动作
+        legal_actions.append(12)  # 拆牌策略
+        legal_actions.append(13)  # 过牌策略
+        legal_actions.append(15)  # 保存实力策略
+        
+        return legal_actions
+     
     def _is_helping_teammate(self) -> bool:
         """检查出牌是否帮助队友"""
         if self.last_move is None or self.last_move_player == self.current_player:

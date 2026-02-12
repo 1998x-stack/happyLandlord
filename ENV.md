@@ -169,25 +169,48 @@ def step(self, action):
 **通道5 [1, :]：**
 - `[0-3]`：四位玩家手牌数量
 
-## 5. 动作空间
+ ## 5. 动作空间
 
-### 5.1 动作类型
-| 动作ID | 类型 | 描述 |
-|--------|------|------|
-| 0 | PASS | 不出牌 |
-| 1+ | 出牌 | 各种牌型组合 |
+ ### 5.1 动作类型
+ | 动作ID | 类型 | 描述 |
+ |--------|------|------|
+ | 0 | PASS | 不出牌 |
+ | 1 | SINGLE | 最小单牌 |
+ | 2 | PAIR | 最小对子 |
+ | 3 | TRIPLE | 最小三张 |
+ | 4 | TRIPLE_WITH_SINGLE | 三带一 |
+ | 5 | TRIPLE_WITH_PAIR | 三带对 |
+ | 6 | STRAIGHT | 顺子 |
+ | 7 | CONSECUTIVE_PAIRS | 连对 |
+ | 8 | AIRPLANE | 飞机 |
+ | 9 | BOMB | 炸弹 |
+ | 10 | KING_BOMB | 王炸 |
+ | 11 | TOP_STRATEGY | 顶牌策略 |
+ | 12 | BREAK_STRATEGY | 拆牌策略 |
+ | 13 | PASS_STRATEGY | 过牌策略 |
+ | 14 | PRESS_STRATEGY | 压牌策略 |
+ | 15 | SAVE_STRATEGY | 保存实力策略 |
 
-### 5.2 动作转换逻辑
-```python
-def _action_to_card_group(action):
-    if action == 0:  # PASS
-        return CardGroup(CardType.PASS, -1)
-    
-    # 当前策略：出最小单牌
-    min_card = min(hand, key=lambda c: c.value)
-    return CardGroup(CardType.SINGLE, min_card.value, [min_card])
-```
-*注：当前实现为简化版本，可扩展支持更多牌型*
+ ### 5.2 动作转换逻辑
+ ```python
+ def _action_to_card_group(action):
+     if action == 0:  # PASS
+         return CardGroup(CardType.PASS, -1)
+     
+     # 根据动作ID选择不同出牌策略
+     # 详见_environment.py_ 中的_action_to_card_group方法
+ ```
+
+ ### 5.3 合法动作获取
+ ```python
+ def get_legal_actions(self):
+     # 返回当前状态下所有合法的动作ID列表
+     # 包括PASS(0)和所有可行的出牌动作
+     legal_actions = [0]  # PASS总是合法
+     # 根据手牌和当前局势动态确定可行动作
+     # ...
+     return legal_actions
+ ```
 
 ## 6. 奖励设计
 
