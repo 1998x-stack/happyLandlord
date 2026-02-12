@@ -1,0 +1,100 @@
+name: Documentation Check
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  docs-check:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: Check documentation files exist
+      run: |
+        if [ ! -f "README.md" ]; then
+          echo "ERROR: README.md not found!"
+          exit 1
+        fi
+        
+        if [ ! -f "USER_GUIDE.md" ]; then
+          echo "ERROR: USER_GUIDE.md not found!"
+          exit 1
+        fi
+        
+        if [ ! -f "ENV.md" ]; then
+          echo "ERROR: ENV.md not found!"
+          exit 1
+        fi
+        
+        echo "All documentation files found!"
+
+    - name: Validate documentation content
+      run: |
+        # Check if README contains essential sections
+        if ! grep -q "# 腾讯欢乐斗地主2V2强化学习项目" README.md; then
+          echo "ERROR: README.md doesn't contain project title!"
+          exit 1
+        fi
+        
+        # Check if User Guide contains essential sections
+        if ! grep -q "# 腾讯欢乐斗地主2V2强化学习项目 - 用户指南" USER_GUIDE.md; then
+          echo "ERROR: USER_GUIDE.md doesn't contain guide title!"
+          exit 1
+        fi
+        
+        echo "Documentation content validation passed!"
+        
+    - name: Check code documentation
+      run: |
+        # Verify that key classes have docstrings
+        python -c "
+        import ast
+        import inspect
+        
+        # Read the environment file
+        with open('environment.py', 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        tree = ast.parse(content)
+        
+        # Check if key classes and methods have docstrings
+        classes_found = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef):
+                if node.name in ['LandlordEnv2v2', 'Card', 'CardGroup']:
+                    classes_found.append(node.name)
+                    # Check if class has docstring
+                    if not ast.get_docstring(node):
+                        print(f'ERROR: Class {node.name} missing docstring')
+                        exit(1)
+                    
+                    # Check key methods
+                    for item in node.body:
+                        if isinstance(item, ast.FunctionDef):
+                            if item.name in ['__init__', 'reset', 'step', 'get_legal_actions'] and not ast.get_docstring(item):
+                                print(f'ERROR: Method {node.name}.{item.name} missing docstring')
+                                exit(1)
+        
+        print(f'Found classes with proper documentation: {classes_found}')
+        
+        # Check other files too
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('agent', 'agent.py')
+        agent_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(agent_module)
+        
+        if not agent_module.DQNAgent.__doc__:
+            print('ERROR: DQNAgent class missing docstring')
+            exit(1)
+        
+        print('Code documentation check passed!')
+        "

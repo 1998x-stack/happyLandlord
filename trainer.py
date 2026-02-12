@@ -64,6 +64,11 @@ class Trainer:
             action = self.agents[current_player].select_action(
                 state, legal_actions, epsilon=epsilon)
             
+            # 验证所选动作是否真的合法
+            if action not in legal_actions:
+                logger.warning(f"Player {current_player} selected illegal action {action}. Using PASS instead.")
+                action = 0  # Default to PASS if selected action is illegal
+            
             # 记录调试信息
             logger.debug(f"Player {current_player} selecting action {action} from {len(legal_actions)} legal actions")
             try:

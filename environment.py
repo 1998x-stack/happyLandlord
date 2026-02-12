@@ -374,8 +374,8 @@ class LandlordEnv2v2:
         
         动作编号定义：
         0: 不出
-        1-10: 根据当前局面智能选择最佳牌型
-        11-20: 特定牌型策略（如炸弹、连牌等）
+        1-10: 基础牌型
+        11-20: 策略性动作
         """
         hand = self.hands[self.current_player]
         hand_values = [card.value for card in hand]
@@ -389,6 +389,266 @@ class LandlordEnv2v2:
         if action == 1:
             min_card = min(hand, key=lambda c: c.value)
             return CardGroup(CardType.SINGLE, min_card.value, [min_card])
+        
+        # 2: 最小对子
+        if action == 2:
+            for value in sorted(set(hand_values)):
+                if hand_values.count(value) >= 2:
+                    pair_cards = [card for card in hand if card.value == value][:2]
+                    return CardGroup(CardType.PAIR, value, pair_cards)
+        
+        # 3: 最小三张
+        if action == 3:
+            for value in sorted(set(hand_values)):
+                if hand_values.count(value) >= 3:
+                    triple_cards = [card for card in hand if card.value == value][:3]
+                    return CardGroup(CardType.TRIPLE, value, triple_cards)
+        
+        # 4: 三带一
+        if action == 4:
+            # 先找三张
+            triple_value = None
+            for value in sorted(set(hand_values)):
+                if hand_values.count(value) >= 3:
+                    triple_value = value
+                    break
+            
+            if triple_value:
+                # 再找最小单牌（非三张牌的点数）
+                available_singles = [v for v in sorted(set(hand_values)) if v != triple_value and hand_values.count(v) >= 1]
+                if available_singles:
+                    single_value = available_singles[0]  # minimum available
+                    triple_cards = [card for card in hand if card.value == triple_value][:3]
+                    single_card = [card for card in hand if card.value == single_value][0]
+                    return CardGroup(CardType.TRIPLE_WITH_SINGLE, triple_value, triple_cards + [single_card])
+        
+        # 5: 三带对
+        if action == 5:
+            # 先找三张
+            triple_value = None
+            for value in sorted(set(hand_values)):
+                if hand_values.count(value) >= 3:
+                    triple_value = value
+                    break
+            
+            if triple_value:
+                # 再找最小对子（非三张牌的点数）
+                for value in sorted(set(hand_values)):
+                    if value != triple_value and hand_values.count(value) >= 2:
+                        triple_cards = [card for card in hand if card.value == triple_value][:3]
+                        pair_cards = [card for card in hand if card.value == value][:2]
+                        return CardGroup(CardType.TRIPLE_WITH_PAIR, triple_value, triple_cards + pair_cards)
+        
+        # 6: 最小顺子（5张）
+        if action == 6:
+            # 寻找连续5张牌
+            unique_values = sorted(set(hand_values))
+            for start_idx in range(len(unique_values) - 4):
+                candidate_seq = unique_values[start_idx:start_idx+5]
+                if all(candidate_seq[i+1] - candidate_seq[i] == 1 for i in range(4)):
+                    # Found a valid straight
+                    straight_cards = []
+                    for value in candidate_seq:
+                        # Take one card of each required value
+                        card_of_value = [c for c in hand if c.value == value][0]
+                        straight_cards.append(card_of_value)
+                    return CardGroup(CardType.STRAIGHT, candidate_seq[0], straight_cards)
+        
+        # 7: 最小连对（3连对）
+        if action == 7:
+            # 获取所有对子点数
+            pair_values = [v for v in sorted(set(hand_values)) if hand_values.count(v) >= 2]
+            
+            # 寻找连续3个对子
+            for i in range(len(pair_values) - 2):
+                if pair_values[i] + 2 == pair_values[i+2]:
+                    # Check if all three values have at least 2 cards
+                    if (hand_values.count(pair_values[i]) >= 2 and 
+                        hand_values.count(pair_values[i+1]) >= 2 and 
+                        hand_values.count(pair_values[i+2]) >= 2):
+                        # 取出这些对子
+                        consecutive_pairs = []
+                        for value in pair_values[i:i+3]:
+                            cards_of_value = [c for c in hand if c.value == value][:2]
+                            consecutive_pairs.extend(cards_of_value)
+                        return CardGroup(CardType.CONSECUTIVE_PAIRS, pair_values[i], consecutive_pairs)
+        
+        # 8: 最小飞机（2个连续三张）
+        if action == 8:
+            # 获取所有三张点数
+            triple_values = [v for v in sorted(set(hand_values)) if hand_values.count(v) >= 3]
+            
+            # 寻找连续2个三张
+            for i in range(len(triple_values) - 1):
+                if triple_values[i] + 1 == triple_values[i+1]:
+                    # 取出这些三张
+                    airplane_cards = []
+                    for value in triple_values[i:i+2]:
+                        cards_of_value = [c for c in hand if c.value == value][:3]
+                        airplane_cards.extend(cards_of_value)
+                    return CardGroup(CardType.AIRPLANE, triple_values[i], airplane_cards)
+        
+        # 9: 炸弹（最小四张炸）
+        if action == 9:
+            for value in sorted(set(hand_values)):
+                if hand_values.count(value) >= 4:
+                    bomb_cards = [card for card in hand if card.value == value][:4]
+                    return CardGroup(CardType.BOMB, value, bomb_cards)
+        
+        # 10: 王炸（如果有）
+        if action == 10:
+            jokers = [card for card in hand if card.is_joker]
+            if len(jokers) >= 2:
+                return CardGroup(CardType.KING_BOMB, 11, jokers[:2])
+        
+        # 11: 顶牌策略（出比对手大的最小牌）
+        if action == 11 and self.last_move:
+            # Only proceed if we can potentially beat the move
+            if self._can_beat_last_move():
+                opp_type = self.last_move.card_type
+                opp_rank = self.last_move.main_rank
+                
+                # For singles, find smallest card that beats opponent
+                if opp_type == CardType.SINGLE:
+                    for card in sorted(hand, key=lambda c: c.value):
+                        if card.value > opp_rank:
+                            return CardGroup(CardType.SINGLE, card.value, [card])
+                
+                # For pairs, find smallest pair that beats opponent
+                elif opp_type == CardType.PAIR:
+                    for value in sorted(set(hand_values)):
+                        if hand_values.count(value) >= 2 and value > opp_rank:
+                            pair_cards = [c for c in hand if c.value == value][:2]
+                            return CardGroup(CardType.PAIR, value, pair_cards)
+        
+        # 12: 拆牌策略（拆大牌管小牌）
+        if action == 12 and self.last_move:
+            if self._can_beat_last_move():
+                # For single opponent card, try to beat with smallest possible
+                if self.last_move.card_type == CardType.SINGLE:
+                    for card in sorted(hand, key=lambda c: c.value):
+                        if card.value > self.last_move.main_rank:
+                            return CardGroup(CardType.SINGLE, card.value, [card])
+        
+        # 13: 过牌策略（队友出牌后选择过牌）
+        if action == 13 and self.last_move_player == self._get_teammate(self.current_player):
+            return CardGroup(CardType.PASS, -1)
+        
+        # 14: 压牌策略（对手出牌后尽量压制）
+        if action == 14 and self.last_move and self.last_move_player != self._get_teammate(self.current_player):
+            if self._can_beat_last_move():
+                # Try to find a move that beats the opponent
+                opp_type = self.last_move.card_type
+                opp_rank = self.last_move.main_rank
+                
+                # Try to use same type with higher rank if possible
+                if opp_type == CardType.SINGLE:
+                    for value in sorted(set(hand_values)):
+                        if value > opp_rank and hand_values.count(value) >= 1:
+                            card = [c for c in hand if c.value == value][0]
+                            return CardGroup(CardType.SINGLE, value, [card])
+                elif opp_type == CardType.PAIR:
+                    for value in sorted(set(hand_values)):
+                        if value > opp_rank and hand_values.count(value) >= 2:
+                            pair_cards = [c for c in hand if c.value == value][:2]
+                            return CardGroup(CardType.PAIR, value, pair_cards)
+        
+        # 15: 保存实力策略（保留大牌和炸弹）
+        if action == 15:
+            # 找最小牌出，避免出大牌
+            min_value = min(hand_values)
+            min_cards = [card for card in hand if card.value == min_value]
+            return CardGroup(CardType.SINGLE, min_value, [min_cards[0]])
+        
+        # If action leads to invalid move, default to PASS
+        return CardGroup(CardType.PASS, -1)
+    
+    def _can_beat_last_move(self) -> bool:
+        """
+        Check if current player can potentially beat the last move
+        
+        Returns:
+            bool: Whether a beat is possible
+        """
+        if not self.last_move:
+            return True  # No last move to beat
+        
+        hand = self.hands[self.current_player]
+        hand_values = [card.value for card in hand]
+        
+        # Check if we have any bombs to beat non-bombs
+        if self.last_move.card_type not in [CardType.BOMB, CardType.KING_BOMB]:
+            # Check for 4+ of any value (potential bombs)
+            for value in set(hand_values):
+                if hand_values.count(value) >= 4:
+                    return True
+            # Check for jokers (king bomb)
+            jokers = [card for card in hand if card.is_joker]
+            if len(jokers) >= 2:
+                return True
+        # If last move was a bomb, check if we can beat it
+        elif self.last_move.card_type == CardType.BOMB:
+            for value in set(hand_values):
+                count = hand_values.count(value)
+                if count >= 4:
+                    # If we have more cards or same count but higher value
+                    if count > len(self.last_move.cards) or (count == len(self.last_move.cards) and value > self.last_move.main_rank):
+                        return True
+            # Check for king bombs
+            jokers = [card for card in hand if card.is_joker]
+            if len(jokers) >= 2:
+                return True
+        elif self.last_move.card_type == CardType.KING_BOMB:
+            # King bombs can only be beaten by larger king bombs (not possible in this game)
+            return False
+        
+        # For non-bomb moves, check if we have higher cards of same type
+        opp_type = self.last_move.card_type
+        opp_rank = self.last_move.main_rank
+        
+        if opp_type == CardType.SINGLE:
+            for value in set(hand_values):
+                if value > opp_rank and hand_values.count(value) >= 1:
+                    return True
+        elif opp_type == CardType.PAIR:
+            for value in set(hand_values):
+                if value > opp_rank and hand_values.count(value) >= 2:
+                    return True
+        elif opp_type == CardType.TRIPLE:
+            for value in set(hand_values):
+                if value > opp_rank and hand_values.count(value) >= 3:
+                    return True
+        elif opp_type == CardType.TRIPLE_WITH_SINGLE:
+            # Need a higher triple or a bomb
+            for value in set(hand_values):
+                if value > opp_rank and hand_values.count(value) >= 3:
+                    # Check if we have enough cards for triple_with_single
+                    if hand_values.count(value) >= 3 and len([v for v in set(hand_values) if v != value]) >= 1:
+                        return True
+            # Check for bombs
+            for value in set(hand_values):
+                if hand_values.count(value) >= 4:
+                    return True
+            jokers = [card for card in hand if card.is_joker]
+            if len(jokers) >= 2:
+                return True
+        elif opp_type == CardType.TRIPLE_WITH_PAIR:
+            # Need a higher triple with pair or a bomb
+            for value in set(hand_values):
+                if value > opp_rank and hand_values.count(value) >= 3:
+                    # Check if we have enough cards for triple_with_pair
+                    other_values = [v for v in set(hand_values) if v != value and hand_values.count(v) >= 2]
+                    if len(other_values) > 0:
+                        return True
+            # Check for bombs
+            for value in set(hand_values):
+                if hand_values.count(value) >= 4:
+                    return True
+            jokers = [card for card in hand if card.is_joker]
+            if len(jokers) >= 2:
+                return True
+        
+        return False
         
         # 2: 最小对子
         if action == 2:
@@ -694,93 +954,304 @@ class LandlordEnv2v2:
         hand_values = [card.value for card in hand]
         hand_values.sort()
         
-        # 1-20: 检查各种牌型是否可能
-        # 检查是否有足够的牌出单张
-        if len(hand) > 0:
-            legal_actions.append(1)  # 最小单牌
+        # Check if we can play based on current game state
+        can_play_anything = self._can_play_anything()
         
-        # 检查是否有对子
-        for value in set(hand_values):
-            if hand_values.count(value) >= 2:
-                legal_actions.append(2)  # 最小对子
-                break
+        # Define action candidates based on game state
+        action_candidates = []
         
-        # 检查是否有三张
-        for value in set(hand_values):
-            if hand_values.count(value) >= 3:
-                legal_actions.append(3)  # 最小三张
-                break
+        if can_play_anything:
+            # If can play anything (first round or after teammate), add all possible plays
+            action_candidates.extend([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+        else:
+            # If there's a current move to beat, only consider beating actions
+            if self.last_move:
+                # Determine which basic actions could potentially beat the current move
+                if self._can_beat_with_single(self.last_move, hand):
+                    action_candidates.extend([1, 11])
+                if self._can_beat_with_pair(self.last_move, hand):
+                    action_candidates.extend([2, 14])
+                if self._can_beat_with_triple(self.last_move, hand):
+                    action_candidates.append(3)
+                if self._can_beat_with_bomb(self.last_move, hand):
+                    action_candidates.append(9)
+                if self._can_beat_with_king_bomb(self.last_move, hand):
+                    action_candidates.append(10)
         
-        # 检查是否有三带一
-        triple_value = None
-        for value in set(hand_values):
-            if hand_values.count(value) >= 3:
-                triple_value = value
-                break
+        # Validate each action by trying to create a valid card group
+        for action_id in action_candidates:
+            try:
+                # Create card group for this action
+                card_group = self._action_to_card_group(action_id)
+                
+                # Check if this card group is valid in current game state
+                if self._is_card_group_valid_and_legal(card_group):
+                    legal_actions.append(action_id)
+            except:
+                # If creating the card group fails, skip this action
+                continue
         
-        if triple_value:
+        # Add strategic actions that are always valid to perform (but may result in pass)
+        if self._is_strategic_action_valid(12, hand):  # 拆牌策略
+            legal_actions.append(12)
+        if self._is_strategic_action_valid(13, hand):  # 过牌策略
+            legal_actions.append(13)  
+        if self._is_strategic_action_valid(15, hand):  # 保存实力策略
+            legal_actions.append(15)
+        
+        return list(set(legal_actions))  # Remove duplicates
+    
+    def _is_card_group_valid_and_legal(self, card_group: CardGroup) -> bool:
+        """
+        Check if a card group is valid and legal to play in the current game state
+        
+        Args:
+            card_group: The card group to validate
+            
+        Returns:
+            bool: Whether the card group is valid and legal
+        """
+        if card_group.card_type == CardType.PASS:
+            return True  # PASS is always valid
+        
+        # Check if all cards in the group are actually in the player's hand
+        hand_cards = self.hands[self.current_player]
+        for card in card_group.cards:
+            if card not in hand_cards:
+                return False
+        
+        # Validate based on game rules
+        return self._is_valid_move(card_group)
+    
+    def _is_strategic_action_valid(self, action_id: int, hand) -> bool:
+        """
+        Check if a strategic action would result in a valid move
+        
+        Args:
+            action_id: The strategic action ID to check
+            hand: Current player's hand
+            
+        Returns:
+            bool: Whether the action would be valid
+        """
+        if action_id == 12:  # 拆牌策略
+            # This strategy should only be valid if we can form a valid card group
+            # For now, return True as it typically tries to form valid singles/pairs
+            return len(hand) > 0
+        elif action_id == 13:  # 过牌策略
+            # This should only be valid when it makes sense (e.g., teammate just played)
+            teammate = self._get_teammate(self.current_player)
+            return self.last_move_player == teammate
+        elif action_id == 15:  # 保存实力策略
+            # This should be valid if we can play a single card (minimize resource loss)
+            return len(hand) > 0
+        elif action_id == 11:  # 顶牌策略
+            # Should only be valid if we can beat the last move with a single
+            if not self.last_move or self.last_move.card_type == CardType.PASS:
+                return False
+            return self._can_beat_with_single(self.last_move, hand)
+        elif action_id == 14:  # 压牌策略
+            # Should only be valid if we can beat the last move
+            if not self.last_move or self.last_move.card_type == CardType.PASS:
+                return False
+            return self._can_beat_last_move()
+        else:  # For basic card types (1-10), they should already be validated elsewhere
+            return True
+    
+    def _can_beat_with_single(self, target_move, hand) -> bool:
+        """Check if we can beat with a single card"""
+        if target_move.card_type == CardType.SINGLE:
+            hand_values = [card.value for card in hand]
             for value in set(hand_values):
-                if value != triple_value:
-                    legal_actions.append(4)  # 三带一
-                    break
-        
-        # 检查是否有三带对
-        if triple_value:
+                if value > target_move.main_rank:
+                    return True
+        elif target_move.card_type not in [CardType.BOMB, CardType.KING_BOMB]:
+            # Any bomb can beat non-bomb
+            hand_values = [card.value for card in hand]
             for value in set(hand_values):
-                if value != triple_value and hand_values.count(value) >= 2:
-                    legal_actions.append(5)  # 三带对
-                    break
-        
-        # 检查是否有顺子（至少5张连续）
-        if len(set(hand_values)) >= 5:
-            for start in range(len(set(hand_values)) - 4):
-                sorted_values = sorted(set(hand_values))
-                if start + 4 < len(sorted_values):
-                    if all(sorted_values[start+i] + 1 == sorted_values[start+i+1] 
-                          for i in range(4)):
-                        legal_actions.append(6)  # 顺子
-                        break
-        
-        # 检查是否有连对
-        pair_values = [v for v in set(hand_values) if hand_values.count(v) >= 2]
-        if len(set(pair_values)) >= 3:
-            pair_values.sort()
-            for i in range(len(pair_values) - 2):
-                if pair_values[i] + 2 == pair_values[i+2]:
-                    legal_actions.append(7)  # 连对
-                    break
-        
-        # 检查是否有飞机
-        triple_values = [v for v in set(hand_values) if hand_values.count(v) >= 3]
-        if len(set(triple_values)) >= 2:
-            triple_values.sort()
-            for i in range(len(triple_values) - 1):
-                if triple_values[i] + 1 == triple_values[i+1]:
-                    legal_actions.append(8)  # 飞机
-                    break
-        
-        # 检查是否有炸弹
+                if hand_values.count(value) >= 4:
+                    return True
+            # King bomb
+            jokers = [card for card in hand if card.is_joker]
+            if len(jokers) >= 2:
+                return True
+        return False
+    
+    def _can_beat_with_pair(self, target_move, hand) -> bool:
+        """Check if we can beat with a pair"""
+        if target_move.card_type == CardType.PAIR:
+            hand_values = [card.value for card in hand]
+            for value in set(hand_values):
+                if hand_values.count(value) >= 2 and value > target_move.main_rank:
+                    return True
+        elif target_move.card_type not in [CardType.BOMB, CardType.KING_BOMB]:
+            # Any bomb can beat non-bomb
+            hand_values = [card.value for card in hand]
+            for value in set(hand_values):
+                if hand_values.count(value) >= 4:
+                    return True
+            # King bomb
+            jokers = [card for card in hand if card.is_joker]
+            if len(jokers) >= 2:
+                return True
+        return False
+    
+    def _can_beat_with_triple(self, target_move, hand) -> bool:
+        """Check if we can beat with a triple"""
+        if target_move.card_type == CardType.TRIPLE:
+            hand_values = [card.value for card in hand]
+            for value in set(hand_values):
+                if hand_values.count(value) >= 3 and value > target_move.main_rank:
+                    return True
+        elif target_move.card_type not in [CardType.BOMB, CardType.KING_BOMB]:
+            # Any bomb can beat non-bomb
+            hand_values = [card.value for card in hand]
+            for value in set(hand_values):
+                if hand_values.count(value) >= 4:
+                    return True
+            # King bomb
+            jokers = [card for card in hand if card.is_joker]
+            if len(jokers) >= 2:
+                return True
+        return False
+    
+    def _can_beat_with_bomb(self, target_move, hand) -> bool:
+        """Check if we can beat with a bomb"""
+        hand_values = [card.value for card in hand]
         for value in set(hand_values):
             if hand_values.count(value) >= 4:
-                legal_actions.append(9)  # 炸弹
-                break
-        
-        # 检查是否有王炸
+                # Check if this bomb can beat target
+                if target_move.card_type in [CardType.BOMB, CardType.KING_BOMB]:
+                    # Must be stronger
+                    if len([c for c in hand if c.value == value]) > len(target_move.cards):
+                        return True
+                    elif len([c for c in hand if c.value == value]) == len(target_move.cards) and value > target_move.main_rank:
+                        return True
+                else:
+                    # Can beat non-bombs
+                    return True
+        return False
+    
+    def _can_beat_with_king_bomb(self, target_move, hand) -> bool:
+        """Check if we can beat with a king bomb"""
         jokers = [card for card in hand if card.is_joker]
         if len(jokers) >= 2:
-            legal_actions.append(10)  # 王炸
+            # King bomb can beat any non-king bomb
+            if target_move.card_type != CardType.KING_BOMB:
+                return True
+            # Against king bombs, check number of jokers
+            target_jokers = [c for c in target_move.cards if c.is_joker]
+            if len(jokers) > len(target_jokers):
+                return True
+        return False
+    
+    def _can_play_anything(self) -> bool:
+        """
+        检查当前是否可以任意出牌（首轮或队友出牌后）
         
-        # 其他策略性动作（11-20）基于当前局面
-        if self.last_move:
-            legal_actions.append(11)  # 顶牌策略
-            legal_actions.append(14)  # 压牌策略
+        Returns:
+            bool: 是否可以任意出牌
+        """
+        # 首轮出牌
+        if self.last_move is None:
+            return True
         
-        # 添加其他策略动作
-        legal_actions.append(12)  # 拆牌策略
-        legal_actions.append(13)  # 过牌策略
-        legal_actions.append(15)  # 保存实力策略
+        # 队友出牌后可任意出牌
+        teammate = self._get_teammate(self.current_player)
+        if self.last_move_player == teammate:
+            return True
         
-        return legal_actions
+        # 其他情况下需要压牌
+        return False
+    
+    def _generate_beating_moves(self, target_move, hand):
+        """
+        生成能够压制目标出牌的可能出牌方案
+        
+        Args:
+            target_move: 目标出牌
+            hand: 当前手牌
+            
+        Returns:
+            List of possible beating moves
+        """
+        possible_moves = []
+        hand_values = [card.value for card in hand]
+        hand_by_value = {}
+        for card in hand:
+            if card.value not in hand_by_value:
+                hand_by_value[card.value] = []
+            hand_by_value[card.value].append(card)
+        
+        # 如果目标是炸弹，只能用更大炸弹或王炸
+        if target_move.card_type in [CardType.BOMB, CardType.KING_BOMB]:
+            # Find bigger bombs
+            for value, cards in hand_by_value.items():
+                if len(cards) >= 4 and len(cards) >= len(target_move.cards):
+                    if len(cards) > len(target_move.cards) or (len(cards) == len(target_move.cards) and value > target_move.main_rank):
+                        possible_moves.append(f"bomb_{value}_{len(cards)}")
+            
+            # Check for king bombs
+            jokers = [card for card in hand if card.is_joker]
+            if len(jokers) >= 2:
+                possible_moves.append(f"king_bomb_{len(jokers)}")
+        
+        else:
+            # Target is not a bomb, can be beaten by same type with higher rank or any bomb
+            target_type = target_move.card_type
+            target_rank = target_move.main_rank
+            
+            if target_type == CardType.SINGLE:
+                # Find single cards higher than target
+                for value, cards in hand_by_value.items():
+                    if len(cards) >= 1 and value > target_rank:
+                        possible_moves.append(f"single_{value}")
+                
+                # Bombs can beat singles
+                for value, cards in hand_by_value.items():
+                    if len(cards) >= 4:
+                        possible_moves.append(f"bomb_{value}_4")
+                
+                # King bombs
+                jokers = [card for card in hand if card.is_joker]
+                if len(jokers) >= 2:
+                    possible_moves.append(f"king_bomb_{len(jokers)}")
+            
+            elif target_type == CardType.PAIR:
+                # Find pairs higher than target
+                for value, cards in hand_by_value.items():
+                    if len(cards) >= 2 and value > target_rank:
+                        possible_moves.append(f"pair_{value}")
+                
+                # Bombs can beat pairs
+                for value, cards in hand_by_value.items():
+                    if len(cards) >= 4:
+                        possible_moves.append(f"bomb_{value}_4")
+                
+                # King bombs
+                jokers = [card for card in hand if card.is_joker]
+                if len(jokers) >= 2:
+                    possible_moves.append(f"king_bomb_{len(jokers)}")
+            
+            elif target_type == CardType.TRIPLE:
+                # Find triples higher than target
+                for value, cards in hand_by_value.items():
+                    if len(cards) >= 3 and value > target_rank:
+                        possible_moves.append(f"triple_{value}")
+                
+                # Bombs can beat triples
+                for value, cards in hand_by_value.items():
+                    if len(cards) >= 4:
+                        possible_moves.append(f"bomb_{value}_4")
+                
+                # King bombs
+                jokers = [card for card in hand if card.is_joker]
+                if len(jokers) >= 2:
+                    possible_moves.append(f"king_bomb_{len(jokers)}")
+            
+            # Similar logic for other types...
+        
+        return possible_moves
      
     def _is_helping_teammate(self) -> bool:
         """检查出牌是否帮助队友"""

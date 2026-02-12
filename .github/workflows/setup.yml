@@ -1,0 +1,136 @@
+name: Setup and Installation Test
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  setup-test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ['3.8', '3.9', '3.10', '3.11']
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Display Python version
+      run: python --version
+
+    - name: Check requirements file
+      run: |
+        if [ ! -f "requirements.txt" ]; then
+          echo "ERROR: requirements.txt not found!"
+          exit 1
+        fi
+        cat requirements.txt
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+      shell: bash
+
+    - name: Test installation (Linux/macOS)
+      if: runner.os != 'Windows'
+      run: |
+        python -c "
+        import torch
+        import numpy
+        import loguru
+        import tensorboardX
+        print('All dependencies imported successfully!')
+        
+        # Test importing project modules
+        from environment import LandlordEnv2v2
+        from agent import DQNAgent
+        from network import DouZeroNet
+        from trainer import Trainer
+        from config import Config
+        print('All project modules imported successfully!')
+        "
+
+    - name: Test installation (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        python -c "
+        import torch
+        import numpy
+        import loguru
+        import tensorboardX
+        print('All dependencies imported successfully!')
+        
+        # Test importing project modules
+        from environment import LandlordEnv2v2
+        from agent import DQNAgent
+        from network import DouZeroNet
+        from trainer import Trainer
+        from config import Config
+        print('All project modules imported successfully!')
+        "
+      shell: pwsh
+
+    - name: Test basic functionality
+      run: |
+        python -c "
+        from environment import LandlordEnv2v2
+        from config import Config
+        
+        # Test environment creation
+        env = LandlordEnv2v2(seed=42)
+        state = env.reset()
+        print(f'Environment created successfully: {state.shape}')
+        
+        # Test getting legal actions
+        legal_actions = env.get_legal_actions()
+        print(f'Legal actions retrieved: {len(legal_actions)} actions available')
+        
+        print('Basic functionality test passed!')
+        "
+
+    - name: Test network initialization
+      run: |
+        python -c "
+        from network import DouZeroNet
+        from config import Config
+        import torch
+        
+        # Test network creation
+        net = DouZeroNet(Config.STATE_SHAPE, 600)
+        print(f'Network created successfully: {net}')
+        
+        # Test forward pass
+        dummy_input = torch.randn(1, *Config.STATE_SHAPE)
+        output = net(dummy_input)
+        print(f'Forward pass successful: {output.shape}')
+        
+        print('Network functionality test passed!')
+        "
+
+    - name: Test agent creation
+      run: |
+        python -c "
+        from agent import DQNAgent
+        from config import Config
+        
+        # Test agent creation
+        agent = DQNAgent(Config.STATE_SHAPE, 600)
+        print(f'Agent created successfully: {agent}')
+        
+        import numpy as np
+        # Test action selection
+        state = np.random.rand(*Config.STATE_SHAPE).astype(np.float32)
+        legal_actions = [0, 1, 2, 3]
+        action = agent.select_action(state, legal_actions, epsilon=0.1)
+        print(f'Action selection successful: {action}')
+        
+        print('Agent functionality test passed!')
+        "
